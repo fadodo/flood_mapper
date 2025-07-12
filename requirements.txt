@@ -1,0 +1,6 @@
+earthengine-api
+geemap
+numpy
+matplotlib
+Pillow
+scikit-image
