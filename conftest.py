@@ -1,8 +1,17 @@
 # conftest.py
 import pytest
 import ee
-from flood_mapper import authentication
 import sys
+import os
+
+# Add the project root to sys.path to ensure 'flood_mapper' is discoverable
+# This assumes conftest.py is in the root of the project.
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__)))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+    print(f"\n--- CONTEST: Added {project_root} to sys.path. ---")
+
+from flood_mapper import authentication # Now flood_mapper should be importable
 
 def pytest_sessionstart(session):
     """

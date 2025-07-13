@@ -4,7 +4,7 @@ Version: 0.1.0
 Summary: A Python package for rapid flood mapping using Sentinel-1 SAR and Sentinel-2 optical satellite data with Google Earth Engine.
 Home-page: https://github.com/fadodo/flood_mapper
 Author: Fifi ADODO
-Author-email: fadodo <your.email@example.com>
+Author-email: Fifi ADODO <fidel999@yahoo.fr>
 Project-URL: Homepage, https://github.com/fadodo/flood_mapper
 Project-URL: Bug Tracker, https://github.com/fadodo/flood_mapper/issues
 Keywords: flood mapping,satellite imagery,SAR,Sentinel-1,Sentinel-2,Google Earth Engine,GIS,remote sensing
@@ -23,7 +23,6 @@ Requires-Dist: matplotlib
 Requires-Dist: google-api-python-client
 Requires-Dist: google-auth-httplib2
 Requires-Dist: google-auth-oauthlib
-Requires-Dist: scikit-image
 Provides-Extra: dev
 Requires-Dist: pytest; extra == "dev"
 Dynamic: author

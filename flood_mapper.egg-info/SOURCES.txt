@@ -2,10 +2,8 @@ README.md
 pyproject.toml
 requirements.txt
 setup.py
-__pycache__/conftest.cpython-310-pytest-8.4.0.pyc
 flood_mapper/__init__ .py
 flood_mapper/authentication.py
-flood_mapper/conftest.py
 flood_mapper/data_ingestion.py
 flood_mapper/flood_detection.py
 flood_mapper/preprocessing.py
@@ -17,13 +15,6 @@ flood_mapper.egg-info/dependency_links.txt
 flood_mapper.egg-info/entry_points.txt
 flood_mapper.egg-info/requires.txt
 flood_mapper.egg-info/top_level.txt
-flood_mapper/__pycache__/authentication.cpython-310.pyc
-flood_mapper/__pycache__/data_ingestion.cpython-310.pyc
-flood_mapper/__pycache__/flood_detection.cpython-310.pyc
-flood_mapper/__pycache__/forecast.cpython-310.pyc
-flood_mapper/__pycache__/preprocessing.cpython-310.pyc
-flood_mapper/__pycache__/utils.cpython-310.pyc
 scripts/run_flood_mapping.py
 tests/__init__ .py
 tests/test_flood_mapper.py
-tests/__pycache__/test_flood_mapper.cpython-310-pytest-8.4.0.pyc
