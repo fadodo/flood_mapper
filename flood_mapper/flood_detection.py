@@ -1,9 +1,8 @@
-
 # flood_detection.py
 """
-This module provides functions for flood detection using Sentinel-1 SAR imagery.
+This module provides functions for flood detection using Sentinel-1 SAR imagery and Sentinel S2 imagery.
 It includes functionality to compute Otsu's threshold for flood extent detection,
-detect flood extent, and calculate flood duration based on a collection of flood extent images.
+detect flood extent, and calculate flood extension.
 It is designed to work with Google Earth Engine (GEE) and requires the GEE library to be initialized.
 """
 
@@ -11,15 +10,16 @@ It is designed to work with Google Earth Engine (GEE) and requires the GEE libra
 import ee
 import numpy as np
 import matplotlib.pyplot as plt
+from flood_mapper.utils import check_same_pixel_count, load_aoi_from_geojson
 
-def compute_otsu_threshold(image, band_name, region, scale=30, bins=256, plot=False):
+def compute_otsu_threshold(image, band_name, otsu_aoi, scale=30, bins=256, plot=False):
     """
     Computes the Otsu threshold for a specific band within a region.
 
     Args:
         image (ee.Image): The image from which to compute the histogram.
         band_name (str): The name of the band to use for thresholding (e.g., 'VH').
-        region (ee.Geometry.Polygon): The region of interest for histogram computation.
+        otsu_aoi (ee.Geometry.Polygon): The region of interest for histogram computation.
         scale (float): The nominal scale in meters of the projection to work in.
         bins (int): The number of histogram bins.
         plot (bool): If True, plots the histogram and the Otsu threshold.
@@ -29,7 +29,7 @@ def compute_otsu_threshold(image, band_name, region, scale=30, bins=256, plot=Fa
     """
     histogram = image.select(band_name).reduceRegion(
         reducer=ee.Reducer.histogram(maxBuckets=bins),
-        geometry=region,
+        geometry=otsu_aoi,
         scale=scale,
         bestEffort=True
     ).getInfo()[band_name]
@@ -60,30 +60,58 @@ def compute_otsu_threshold(image, band_name, region, scale=30, bins=256, plot=Fa
 
     return threshold
 
-def detect_flood_extent(pre_event_sar, post_event_sar, aoi_hist_region=None):
+def detect_flood_extent(pre_event_sar, post_event_sar, otsu_aoi_geojson_path=None):
     """
     Detects flood extent using change detection on SAR imagery and Otsu's method.
 
     Args:
         pre_event_sar (ee.Image): Pre-event smoothed SAR image.
         post_event_sar (ee.Image): Post-event smoothed SAR image.
-        aoi_hist_region (ee.Geometry.Polygon, optional): Region for histogram computation
-                                                         to determine Otsu threshold.
-                                                         If None, uses a default small polygon.
+        aoi (ee.Geometry.Polygon): The main Area of Interest for the analysis.
+        otsu_aoi_geojson_path (str, optional): Path to a GeoJSON file defining a specific
+                                                region for Otsu threshold computation.
+                                                If None, a default small polygon over Lac Togo will be used.
 
     Returns:
-        ee.Image: Binary image representing flood extent.
+        ee.Image: Binary image representing flood extent. Returns None if pixel counts are inconsistent.
     """
-    if aoi_hist_region is None:
-        # Default AOI for histogram if not provided (example: Lomé area)
+    # Determine the region for Otsu threshold calculation
+    # If a specific GeoJSON path is provided, try to load it.
+    # If loading fails or no path is provided, fall back to a default hardcoded AOI.
+    if otsu_aoi_geojson_path:
+        try:
+            aoi_hist_region = load_aoi_from_geojson(otsu_aoi_geojson_path)
+            print(f"AOI for Otsu threshold loaded from: {otsu_aoi_geojson_path}")
+        except ValueError as e:
+            print(f"WARNING: Error loading specific AOI for Otsu threshold: {e}. Falling back to default Otsu AOI.")
+            aoi_hist_region = ee.Geometry.Polygon(
+                [[[1.406947563254846, 6.279016328141211],
+                  [1.406947563254846, 6.273029988557553],
+                  [1.4196204943754935, 6.273029988557553],
+                  [1.4196204943754935, 6.279016328141211],
+                  [1.4069475632846, 6.279016328141211]]]
+            )
+            print("Using default Otsu AOI over Lac Togo (Lomé, Togo).")   
+    else:
         aoi_hist_region = ee.Geometry.Polygon(
             [[[1.406947563254846, 6.279016328141211],
               [1.406947563254846, 6.273029988557553],
               [1.4196204943754935, 6.273029988557553],
               [1.4196204943754935, 6.279016328141211],
-              [1.406947563254846, 6.279016328141211]]]
+              [1.4069475632846, 6.279016328141211]]]
         )
-        print("Using default AOI for Otsu threshold calculation as no AOI_hist was provided.")
+        print("No Otsu AOI GeoJSON path provided. Using default Otsu AOI over Lac Togo.")
+
+    # Get a common region from one of the images for pixel count comparison
+    # Assuming both images cover the same area, we can use the geometry of one.
+    comparison_region = pre_event_sar.geometry()
+
+    # Check if the pixel counts are the same for SAR images
+    if not check_same_pixel_count(pre_event_sar, post_event_sar, comparison_region):
+        print("WARNING: Pre-event and post-event SAR images have different pixel counts. Flood detection will not be performed.")
+        return None # Do not calculate flood extent if pixel counts are inconsistent
+    else:
+        print("Pre-event and post-event SAR images have consistent pixel counts.")
 
     # Compute Otsu thresholds for pre- and post-event images
     threshold_pre = compute_otsu_threshold(pre_event_sar, 'VH', aoi_hist_region, plot=False)
@@ -100,19 +128,31 @@ def detect_flood_extent(pre_event_sar, post_event_sar, aoi_hist_region=None):
     flood_extent = water_post.And(water_pre.Not()).rename('flood_extent_sar')
     return flood_extent
 
-def detect_flood_extent_s2_ndwi(pre_event_ndwi_mask, post_event_ndwi_mask):
+def detect_flood_extent_s2_ndwi(pre_event_ndwi_mask, post_event_ndwi_mask, aoi): 
     """
     Detects flood extent using change detection on Sentinel-2 NDWI masks.
 
     Args:
         pre_event_ndwi_mask (ee.Image): Binary water mask from pre-event NDWI (1=water, 0=land).
         post_event_ndwi_mask (ee.Image): Binary water mask from post-event NDWI (1=water, 0=land).
+        aoi (ee.Geometry.Polygon): The main Area of Interest for the analysis.
 
     Returns:
-        ee.Image: Binary image representing flood extent from NDWI.
+        ee.Image: Binary image representing flood extent from NDWI. Returns None if pixel counts are inconsistent.
     """
     if not pre_event_ndwi_mask or not post_event_ndwi_mask:
         raise ValueError("Both pre-event and post-event NDWI masks are required for S2 flood detection.")
+    
+    # Get a common region from one of the masks for pixel count comparison
+    # Assuming both masks cover the same area, we can use the geometry of one.
+    comparison_region = pre_event_ndwi_mask.geometry()
+
+    # Check if the pixel counts are the same
+    if not check_same_pixel_count(pre_event_ndwi_mask, post_event_ndwi_mask, comparison_region):
+        print("WARNING: Pre-event and post-event NDWI masks have different pixel counts. Flood detection will not be performed.")
+        return None # Do not calculate flood extent if pixel counts are inconsistent
+    else:
+        print("Pre-event and post-event NDWI masks have consistent pixel counts.")
 
     # Detect new flood areas (water_post AND NOT water_pre)
     # The logic is the same as for SAR, but applied to NDWI-derived water masks.
@@ -120,13 +160,13 @@ def detect_flood_extent_s2_ndwi(pre_event_ndwi_mask, post_event_ndwi_mask):
     return flood_extent_ndwi
 
 
-def refine_flood_extent_with_topology(flooded_area_sar, aoi, min_connected_pixels=8, max_slope_percent=5):
+def refine_flood_extent_with_topology(flooded_area_image, aoi, min_connected_pixels=8, max_slope_percent=5):
     """
     Refines the detected flood extent by filtering based on connected pixels
     and terrain slope.
 
     Args:
-        flooded_area_sar (ee.Image): The initial binary flood extent image from SAR.
+        flooded_area_image (ee.Image): The initial binary flood extent image (from SAR or NDWI).
         aoi (ee.Geometry.Polygon): The Area of Interest to clip the DEM.
         min_connected_pixels (int): Minimum number of connected pixels for a flood patch to be retained.
         max_slope_percent (float): Maximum allowed slope (in percent) for flooded areas.
@@ -138,8 +178,8 @@ def refine_flood_extent_with_topology(flooded_area_sar, aoi, min_connected_pixel
 
     # 1. Connected Pixel Count
     # Retain only larger connected components (e.g., >= 8 pixels)
-    connections = flooded_area_sar.connectedPixelCount()
-    flooded_area_conn = flooded_area_sar.updateMask(connections.gte(min_connected_pixels))
+    connections = flooded_area_image.connectedPixelCount()
+    flooded_area_conn = flooded_area_image.updateMask(connections.gte(min_connected_pixels))
 
     # 2. Topographic Masking (Slope)
     # Load the HydroSHEDS Digital Elevation Model (DEM)
@@ -159,24 +199,48 @@ def refine_flood_extent_with_topology(flooded_area_sar, aoi, min_connected_pixel
     
     return flooded_area_conn_topo.rename('effective_flood_extent')
 
-def calculate_flood_duration(flood_extent_collection, roi, start_date, end_date):
+def calculate_flood_extension(pre_event_water_mask, post_event_water_mask, aoi):
     """
-    Calculates flood duration based on a collection of flood extent images.
+    Calculates the flood extension by subtracting the pre-event water area from the post-event water area.
 
     Args:
-        flood_extent_collection (ee.ImageCollection): Collection of binary flood extent images.
-        roi (ee.Geometry.Polygon): Region of interest.
-        start_date (ee.Date): Start date for duration calculation.
-        end_date (ee.Date): End date for duration calculation.
+        pre_event_water_mask (ee.Image): Binary water mask from pre-event (1=water, 0=land).
+        post_event_water_mask (ee.Image): Binary water mask from post-event (1=water, 0=land).
+        aoi (ee.Geometry.Polygon): The Area of Interest for the calculation.
 
     Returns:
-        ee.Image: Image where pixel values represent flood duration in days.
+        float: The flood extension in square kilometers.
     """
-    # Assuming flood_extent_collection contains binary images (1 for flood, 0 for no flood)
-    # The sum of these images over time will give the duration if each image represents a day
-    # Or, if images are snapshots, it counts the number of times a pixel was flooded.
+    if not pre_event_water_mask or not post_event_water_mask:
+        print("WARNING: Both pre-event and post-event water masks are required to calculate flood extension.")
+        return 0.0
 
-    # For a more precise duration, you'd need daily flood maps or interpolate.
-    # For simplicity, let's sum up the flood occurrences.
-    flood_duration = flood_extent_collection.sum().rename('flood_duration')
-    return flood_duration.clip(roi)
+    # Ensure pixel counts are consistent before calculating extension
+    if not check_same_pixel_count(pre_event_water_mask, post_event_water_mask, aoi):
+        print("WARNING: Pre-event and post-event water masks have different pixel counts. Flood extension calculation might be inaccurate.")
+        # Decide whether to proceed with calculation or return 0.0
+        # For now, we will proceed but warn. If strict consistency is needed, return 0.0 here.
+
+    # Calculate area of pre and post water masks
+    pre_water_area_sqkm = pre_event_water_mask.multiply(ee.Image.pixelArea()).reduceRegion(
+        reducer=ee.Reducer.sum(),
+        geometry=aoi,
+        scale=10, # Assuming 10m resolution for S2
+        maxPixels=1e9,
+        bestEffort=True
+    ).getInfo().get(pre_event_water_mask.bandNames().get(0).getInfo(), 0) / 1e6
+
+    post_water_area_sqkm = post_event_water_mask.multiply(ee.Image.pixelArea()).reduceRegion(
+        reducer=ee.Reducer.sum(),
+        geometry=aoi,
+        scale=10, # Assuming 10m resolution for S2
+        maxPixels=1e9,
+        bestEffort=True
+    ).getInfo().get(post_event_water_mask.bandNames().get(0).getInfo(), 0) / 1e6
+
+    flood_extension_sqkm = post_water_area_sqkm - pre_water_area_sqkm
+    print(f"Pre-event water area: {pre_water_area_sqkm:.2f} km²")
+    print(f"Post-event water area: {post_water_area_sqkm:.2f} km²")
+    print(f"Calculated Flood Extension: {flood_extension_sqkm:.2f} km²")
+
+    return flood_extension_sqkm

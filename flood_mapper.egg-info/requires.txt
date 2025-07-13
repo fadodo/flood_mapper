@@ -2,4 +2,10 @@ earthengine-api
 geemap
 numpy
 matplotlib
-Pillow
+google-api-python-client
+google-auth-httplib2
+google-auth-oauthlib
+scikit-image
+
+[dev]
+pytest

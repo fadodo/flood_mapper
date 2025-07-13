@@ -8,7 +8,7 @@ It uses pytest for testing and assumes that Google Earth Engine (GEE) is properl
 import pytest
 import ee
 import numpy as np 
-from flood_mapper import authentication, data_ingestion, preprocessing, flood_detection, utils, forecast
+from flood_mapper import authentication, data_ingestion, preprocessing, flood_detection, utils
 
 # Explicitly import Geometry and Date from ee to help with isinstance checks
 from ee import Geometry, Date
@@ -34,6 +34,9 @@ def test_get_sentinel1_collection(ee_init): # Depend on ee_init
     """Test if Sentinel-1 collection can be fetched."""
     # Create ee.Date and ee.Geometry objects within the test function
     test_event_date = Date('2025-06-02') # Use Date alias
+    search_window=12
+    test_start_event=test_event_date.advance(-search_window,'day')
+    test_end_event=test_event_date.advance(search_window,'day')
     test_aoi = Geometry.Polygon( # Use Geometry alias
         [[[1.0, 6.0], [1.5, 6.0], [1.5, 6.5], [1.0, 6.5], [1.0, 6.0]]]
     )
@@ -41,7 +44,7 @@ def test_get_sentinel1_collection(ee_init): # Depend on ee_init
     print(f"Type of test_event_date: {type(test_event_date)}") 
     print(f"Type of ee.Date (alias): {type(Date)}") # Check alias type
     collection = data_ingestion.get_sentinel1_collection(
-        test_aoi, test_event_date, search_window=12 # Corrected: search_window is an int
+        test_aoi, test_start_event, test_end_event # Corrected: search_window is an int
     )
     assert collection.size().getInfo() > 0, "Should retrieve at least one Sentinel-1 image."
 
@@ -49,6 +52,9 @@ def test_get_sentinel2_collection(ee_init): # Depend on ee_init
     """Test if Sentinel-2 collection can be fetched."""
     # Create ee.Date and ee.Geometry objects within the test function
     test_event_date = Date('2025-06-02') # Use Date alias
+    search_window=12
+    test_start_event=test_event_date.advance(-search_window,'day')
+    test_end_event=test_event_date.advance(search_window,'day')
     test_aoi = Geometry.Polygon( # Use Geometry alias
         [[[1.0, 6.0], [1.5, 6.0], [1.5, 6.5], [1.0, 6.5], [1.0, 6.0]]]
     )
@@ -56,7 +62,7 @@ def test_get_sentinel2_collection(ee_init): # Depend on ee_init
     print(f"Type of test_event_date: {type(test_event_date)}") 
     print(f"Type of ee.Date (alias): {type(Date)}") # Check alias type
     collection = data_ingestion.get_sentinel2_collection(
-        test_aoi, test_event_date, search_window=12 # Corrected: search_window is an int
+        test_aoi, test_start_event, test_end_event # Corrected: search_window is an int
     )
     assert collection.size().getInfo() > 0, "Should retrieve at least one Sentinel-2 image."
 
@@ -109,7 +115,9 @@ def test_compute_otsu_threshold(ee_init): # Depend on ee_init
     
     sar_image = sar_image.select('VH').clip(test_aoi.centroid().buffer(1000))
 
-    small_aoi_hist = test_aoi.centroid().buffer(100)
+    # For this test, we are directly testing compute_otsu_threshold,
+    # so we pass an ee.Geometry.Polygon as the otsu_aoi argument.
+    small_aoi_hist = test_aoi.centroid().buffer(100) 
 
     threshold = flood_detection.compute_otsu_threshold(sar_image, 'VH', small_aoi_hist)
     assert isinstance(threshold, (float, int)), "Otsu threshold should be a number."
@@ -134,7 +142,11 @@ def test_detect_flood_extent(ee_init): # Depend on ee_init
     pre_s1_smooth = preprocessing.speckle_smoothing(pre_s1.select('VH')).clip(clip_region)
     post_s1_smooth = preprocessing.speckle_smoothing(post_s1.select('VH')).clip(clip_region)
 
-    flood_map = flood_detection.detect_flood_extent(pre_s1_smooth, post_s1_smooth, test_aoi)
+    # Updated call to include the new otsu_aoi_geojson_path argument.
+    # Passing None here to test the default behavior within detect_flood_extent.
+    flood_map = flood_detection.detect_flood_extent(pre_s1_smooth, post_s1_smooth, test_aoi, otsu_aoi_geojson_path=None)
+    
+    # If flood_map is None due to pixel count inconsistency, the assert will fail, which is expected.
     assert isinstance(flood_map, ee.Image), "Flood map should be an ee.Image."
     assert flood_map.bandNames().getInfo() == ['flood_extent_sar'], "Flood map should have 'flood_extent_sar' band."
 
@@ -150,7 +162,10 @@ def test_detect_flood_extent_s2_ndwi(ee_init): # Depend on ee_init
     pre_ndwi_mask = lon.lt(1.2).And(lat.lt(6.25)).rename('ndwi_water_pre')
     post_ndwi_mask = lon.gt(1.3).And(lat.gt(6.25)).Or(lon.lt(1.2).And(lat.lt(6.25))).rename('ndwi_water_post')
 
-    s2_flood_map = flood_detection.detect_flood_extent_s2_ndwi(pre_ndwi_mask, post_ndwi_mask)
+    # Updated call to include the new aoi argument.
+    s2_flood_map = flood_detection.detect_flood_extent_s2_ndwi(pre_ndwi_mask, post_ndwi_mask, test_aoi)
+    
+    # If s2_flood_map is None due to pixel count inconsistency, the assert will fail, which is expected.
     assert isinstance(s2_flood_map, ee.Image), "S2 flood map should be an ee.Image."
     assert s2_flood_map.bandNames().getInfo() == ['flood_extent_ndwi'], "S2 flood map should have 'flood_extent_ndwi' band."
 
@@ -202,33 +217,6 @@ def test_calculate_area(ee_init): # Depend on ee_init
     # Increased tolerance slightly for floating point comparisons
     assert abs(calculated_area - expected_area_sq_km) < 0.005, f"Calculated area {calculated_area:.4f} km² differs significantly from expected {expected_area_sq_km:.4f} km²."
 
-
-def test_get_cpc_forecast_precipitation(ee_init): # Depend on ee_init
-    """Test fetching CPC forecast data."""
-    test_event_date = Date('2025-06-02') # Use Date alias
-    test_aoi = Geometry.Polygon( # Use Geometry alias
-        [[[1.0, 6.0], [1.5, 6.0], [1.5, 6.5], [1.0, 6.5], [1.0, 6.0]]]
-    )
-    # Corrected: search_window is an int, not an ee.Date
-    forecast_image = forecast.get_cpc_forecast_precipitation(test_aoi, test_event_date, search_window=3) 
-    assert isinstance(forecast_image, ee.Image), "Forecast output should be an ee.Image."
-    assert forecast_image.bandNames().getInfo() == ['PRCP'], "Forecast image should have 'PRCP' band."
-
-def test_get_precipitation_stats(ee_init): # Renamed to match forecast.py
-    """Test precipitation statistics calculation (now sum)."""
-    test_event_date = Date('2025-06-02') # Use Date alias
-    test_aoi = Geometry.Polygon( # Use Geometry alias
-        [[[1.0, 6.0], [1.5, 6.0], [1.5, 6.5], [1.0, 6.5], [1.0, 6.0]]]
-    )
-    # Corrected: search_window is an int, not an ee.Date
-    forecast_image = forecast.get_cpc_forecast_precipitation(test_aoi, test_event_date, search_window=3) 
-    if forecast_image is None:
-        pytest.skip("No forecast image available to calculate stats.")
-    
-    stats = forecast.get_precipitation_stats(forecast_image, test_aoi) # Updated function call
-    assert isinstance(stats, dict), "Stats should be a dictionary."
-    assert "mean_precipitation" in stats, "Stats should contain 'mean_precipitation' (representing sum)."
-    assert isinstance(stats["mean_precipitation"], (float, int, type(None))), "Precipitation stats should be a number or None."
 
 def test_load_aoi_from_geojson(tmp_path, ee_init):
     """Test loading AOI from a GeoJSON file."""

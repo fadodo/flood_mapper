@@ -1,4 +1,3 @@
-
 # preprocessing.py 
 """
 This module provides functions for preprocessing Sentinel-1 and Sentinel-2 imagery.
@@ -77,6 +76,13 @@ def get_pre_and_post_s2_images(s2_collection, roi, event_date, search_window=20)
 
     s2_pre_event_median = s2_collection.filterDate(start_date_s2, event_date).median().clip(roi)
     s2_post_event_median = s2_collection.filterDate(event_date, end_date_s2).median().clip(roi)
+
+    # Note: ee.ImageCollection.median() can return an empty image (all masked) if no images are found.
+    # We need to check if the resulting median images are actually valid (not entirely masked).
+    # A common way to check is to try to get a property or reduce a region.
+    # However, for simplicity here, we'll rely on downstream errors if the image is truly empty.
+    # If a more robust check is needed, consider:
+    # if s2_pre_event_median.bandNames().getInfo() == [] or s2_pre_event_median.reduceRegion(ee.Reducer.count(), roi, 1000).getInfo().values().get(0).getInfo() == 0:
 
     if not s2_pre_event_median or not s2_post_event_median:
          raise ValueError(

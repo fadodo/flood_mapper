@@ -1,0 +1,44 @@
+# pyproject.toml
+[build-system]
+requires = ["setuptools>=61.0"] # Specify setuptools as a build dependency
+build-backend = "setuptools.build_meta" # Tell pip to use setuptools for building
+
+[project]
+name = "flood_mapper"
+version = "0.1.0"
+description = "A Python package for rapid flood mapping using Sentinel-1 SAR and Sentinel-2 optical satellite data with Google Earth Engine."
+readme = "README.md"
+requires-python = ">=3.8"
+license = { file = "LICENSE" } # Assuming you have a LICENSE file
+authors = [
+  { name="Fifi ADODO", email="fidel999@yahoo.fr" }, # Update with your name and email
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering :: GIS",
+    "Topic :: Scientific/Engineering :: Image Processing",
+    "Topic :: Environmental :: GIS",
+]
+keywords = ["flood mapping", "satellite imagery", "SAR", "Sentinel-1", "Sentinel-2", "Google Earth Engine", "GIS", "remote sensing"]
+
+dependencies = [
+    "earthengine-api",
+    "geemap",
+    "numpy",
+    "matplotlib",
+    "google-api-python-client",
+    "google-auth-httplib2",
+    "google-auth-oauthlib",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/fadodo/flood_mapper" # Update with your actual GitHub repo URL
+"Bug Tracker" = "https://github.com/fadodo/flood_mapper/issues" # Update with your actual GitHub repo URL
+
+[project.scripts]
+run_flood_mapping = "scripts.run_flood_mapping:main"
+
+[project.optional-dependencies]
+dev = ["pytest"] # For development, including testing
