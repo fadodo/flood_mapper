@@ -134,8 +134,8 @@ def check_same_pixel_count(image1, image2, region, scale=10):
     pixel_count1 = count1.get(image1.bandNames().get(0).getInfo(), 0)
     pixel_count2 = count2.get(image2.bandNames().get(0).getInfo(), 0)
 
-    print(f"Pixel count for image1: {pixel_count1}")
-    print(f"Pixel count for image2: {pixel_count2}")
+    print(f"Pixel count for pre_event image: {pixel_count1}")
+    print(f"Pixel count for post_event image: {pixel_count2}")
 
     # Return True if the pixel counts are identical, False otherwise.
     return pixel_count1 == pixel_count2

@@ -14,7 +14,7 @@ from flood_mapper.utils import check_same_pixel_count, load_aoi_from_geojson
 
 def compute_otsu_threshold(image, band_name, otsu_aoi, scale=30, bins=256, plot=False):
     """
-    Computes the Otsu threshold for a specific band within a region.
+    Computes the Otsu threshold for a specific band within a specific region.
 
     Args:
         image (ee.Image): The image from which to compute the histogram.
@@ -33,6 +33,11 @@ def compute_otsu_threshold(image, band_name, otsu_aoi, scale=30, bins=256, plot=
         scale=scale,
         bestEffort=True
     ).getInfo()[band_name]
+
+    # Check if histogram is None (e.g., no data in otsu_aoi)
+    if histogram is None:
+        print(f"WARNING: No histogram data found for band '{band_name}' in the specified Otsu AOI. Returning a default threshold.")
+        return -20.0 # Return a sensible default or raise an error
 
     hist = np.array(histogram["histogram"])
     values = np.array(histogram["bucketMeans"])
@@ -60,39 +65,24 @@ def compute_otsu_threshold(image, band_name, otsu_aoi, scale=30, bins=256, plot=
 
     return threshold
 
-def detect_flood_extent(pre_event_sar, post_event_sar, otsu_aoi_geojson_path=None):
+def detect_flood_extent(pre_event_sar, post_event_sar, aoi, otsu_aoi=None):
     """
     Detects flood extent using change detection on SAR imagery and Otsu's method.
+    If pixel counts are inconsistent, the detection is performed only on common available pixels.
 
     Args:
         pre_event_sar (ee.Image): Pre-event smoothed SAR image.
         post_event_sar (ee.Image): Post-event smoothed SAR image.
         aoi (ee.Geometry.Polygon): The main Area of Interest for the analysis.
-        otsu_aoi_geojson_path (str, optional): Path to a GeoJSON file defining a specific
-                                                region for Otsu threshold computation.
+        otsu_aoi (ee.Geometry.Polygon, optional): The specific region for Otsu threshold computation.
                                                 If None, a default small polygon over Lac Togo will be used.
 
     Returns:
-        ee.Image: Binary image representing flood extent. Returns None if pixel counts are inconsistent.
+        ee.Image: Binary image representing flood extent.
     """
     # Determine the region for Otsu threshold calculation
-    # If a specific GeoJSON path is provided, try to load it.
-    # If loading fails or no path is provided, fall back to a default hardcoded AOI.
-    if otsu_aoi_geojson_path:
-        try:
-            aoi_hist_region = load_aoi_from_geojson(otsu_aoi_geojson_path)
-            print(f"AOI for Otsu threshold loaded from: {otsu_aoi_geojson_path}")
-        except ValueError as e:
-            print(f"WARNING: Error loading specific AOI for Otsu threshold: {e}. Falling back to default Otsu AOI.")
-            aoi_hist_region = ee.Geometry.Polygon(
-                [[[1.406947563254846, 6.279016328141211],
-                  [1.406947563254846, 6.273029988557553],
-                  [1.4196204943754935, 6.273029988557553],
-                  [1.4196204943754935, 6.279016328141211],
-                  [1.4069475632846, 6.279016328141211]]]
-            )
-            print("Using default Otsu AOI over Lac Togo (Lomé, Togo).")   
-    else:
+    if otsu_aoi is None:
+        # Use the default Lac Togo polygon if no specific Otsu AOI is provided
         aoi_hist_region = ee.Geometry.Polygon(
             [[[1.406947563254846, 6.279016328141211],
               [1.406947563254846, 6.273029988557553],
@@ -100,37 +90,52 @@ def detect_flood_extent(pre_event_sar, post_event_sar, otsu_aoi_geojson_path=Non
               [1.4196204943754935, 6.279016328141211],
               [1.4069475632846, 6.279016328141211]]]
         )
-        print("No Otsu AOI GeoJSON path provided. Using default Otsu AOI over Lac Togo.")
+        print("No specific Otsu AOI provided. Using default Otsu AOI over Lac Togo.")
+    else:
+        aoi_hist_region = otsu_aoi
+        print(f"Using provided Otsu AOI: {aoi_hist_region.getInfo()['coordinates']}")
+
+
+    # Initialize images for processing (can be original or masked)
+    pre_event_sar_for_processing = pre_event_sar
+    post_event_sar_for_processing = post_event_sar
 
     # Get a common region from one of the images for pixel count comparison
-    # Assuming both images cover the same area, we can use the geometry of one.
     comparison_region = pre_event_sar.geometry()
 
     # Check if the pixel counts are the same for SAR images
     if not check_same_pixel_count(pre_event_sar, post_event_sar, comparison_region):
-        print("WARNING: Pre-event and post-event SAR images have different pixel counts. Flood detection will not be performed.")
-        return None # Do not calculate flood extent if pixel counts are inconsistent
+        print("WARNING: Pre-event and post-event SAR images have different pixel counts. Flood detection will be performed only on common mask. Flood detection might be therefore unreliable.")
+        # Create a common mask for pixels available in both images
+        common_mask = pre_event_sar.mask().And(post_event_sar.mask())
+        # Apply the common mask to both images
+        pre_event_sar_for_processing = pre_event_sar.updateMask(common_mask)
+        post_event_sar_for_processing = post_event_sar.updateMask(common_mask)
     else:
         print("Pre-event and post-event SAR images have consistent pixel counts.")
 
-    # Compute Otsu thresholds for pre- and post-event images
-    threshold_pre = compute_otsu_threshold(pre_event_sar, 'VH', aoi_hist_region, plot=False)
-    threshold_post = compute_otsu_threshold(post_event_sar, 'VH', aoi_hist_region, plot=False)
+    # Compute Otsu thresholds for pre- and post-event images using the (possibly masked) images
+    threshold_pre = compute_otsu_threshold(pre_event_sar_for_processing, 'VH', aoi_hist_region, plot=True)
+    threshold_post = compute_otsu_threshold(post_event_sar_for_processing, 'VH', aoi_hist_region, plot=True)
 
     print(f"Otsu Threshold for pre-event SAR image: {threshold_pre:.2f}")
     print(f"Otsu Threshold for post-event SAR image: {threshold_post:.2f}")
 
     # Create binary masks for water (values below threshold)
-    water_pre = pre_event_sar.select('VH').lt(threshold_pre)
-    water_post = post_event_sar.select('VH').lt(threshold_post)
+    # Apply thresholds to the commonly masked images if inconsistent, otherwise original
+    water_pre = pre_event_sar_for_processing.select('VH').lt(threshold_pre)
+    water_post = post_event_sar_for_processing.select('VH').lt(threshold_post)
 
     # Detect new flood areas (water_post AND NOT water_pre)
+    # The result will inherently only contain pixels common to both original images if common_mask was applied
     flood_extent = water_post.And(water_pre.Not()).rename('flood_extent_sar')
+
     return flood_extent
 
 def detect_flood_extent_s2_ndwi(pre_event_ndwi_mask, post_event_ndwi_mask, aoi): 
     """
     Detects flood extent using change detection on Sentinel-2 NDWI masks.
+    If pixel counts are inconsistent, the detection is performed only on common available pixels.
 
     Args:
         pre_event_ndwi_mask (ee.Image): Binary water mask from pre-event NDWI (1=water, 0=land).
@@ -138,27 +143,35 @@ def detect_flood_extent_s2_ndwi(pre_event_ndwi_mask, post_event_ndwi_mask, aoi):
         aoi (ee.Geometry.Polygon): The main Area of Interest for the analysis.
 
     Returns:
-        ee.Image: Binary image representing flood extent from NDWI. Returns None if pixel counts are inconsistent.
+        ee.Image: Binary image representing flood extent from NDWI.
     """
     if not pre_event_ndwi_mask or not post_event_ndwi_mask:
         raise ValueError("Both pre-event and post-event NDWI masks are required for S2 flood detection.")
     
+    # Initialize masks for processing (can be original or masked)
+    pre_event_ndwi_mask_for_processing = pre_event_ndwi_mask
+    post_event_ndwi_mask_for_processing = post_event_ndwi_mask
+
     # Get a common region from one of the masks for pixel count comparison
     # Assuming both masks cover the same area, we can use the geometry of one.
     comparison_region = pre_event_ndwi_mask.geometry()
 
     # Check if the pixel counts are the same
     if not check_same_pixel_count(pre_event_ndwi_mask, post_event_ndwi_mask, comparison_region):
-        print("WARNING: Pre-event and post-event NDWI masks have different pixel counts. Flood detection will not be performed.")
-        return None # Do not calculate flood extent if pixel counts are inconsistent
+        print("WARNING: Pre-event and post-event NDWI masks have different pixel counts. Flood detection will be performed only on common mask. Flood detection might be therefore unreliable.")
+        # Create a common mask for pixels available in both NDWI masks
+        common_mask = pre_event_ndwi_mask.mask().And(post_event_ndwi_mask.mask())
+        # Apply the common mask to both NDWI masks
+        pre_event_ndwi_mask_for_processing = pre_event_ndwi_mask.updateMask(common_mask)
+        post_event_ndwi_mask_for_processing = post_event_ndwi_mask.updateMask(common_mask)
     else:
         print("Pre-event and post-event NDWI masks have consistent pixel counts.")
-
+        
     # Detect new flood areas (water_post AND NOT water_pre)
-    # The logic is the same as for SAR, but applied to NDWI-derived water masks.
-    flood_extent_ndwi = post_event_ndwi_mask.And(pre_event_ndwi_mask.Not()).rename('flood_extent_ndwi')
-    return flood_extent_ndwi
+    # The result will inherently only contain pixels common to both original images if common_mask was applied
+    flood_extent_ndwi = post_event_ndwi_mask_for_processing.And(pre_event_ndwi_mask_for_processing.Not()).rename('flood_extent_ndwi')
 
+    return flood_extent_ndwi
 
 def refine_flood_extent_with_topology(flooded_area_image, aoi, min_connected_pixels=8, max_slope_percent=5):
     """
@@ -199,48 +212,26 @@ def refine_flood_extent_with_topology(flooded_area_image, aoi, min_connected_pix
     
     return flooded_area_conn_topo.rename('effective_flood_extent')
 
-def calculate_flood_extension(pre_event_water_mask, post_event_water_mask, aoi):
+def calculate_flood_extension(effective_flood_extent_image, aoi):
     """
-    Calculates the flood extension by subtracting the pre-event water area from the post-event water area.
+    Calculates the area of the refined flood extent.
 
     Args:
-        pre_event_water_mask (ee.Image): Binary water mask from pre-event (1=water, 0=land).
-        post_event_water_mask (ee.Image): Binary water mask from post-event (1=water, 0=land).
+        effective_flood_extent_image (ee.Image): The refined binary flood extent image
+                                                  (output from refine_flood_extent_with_topology).
         aoi (ee.Geometry.Polygon): The Area of Interest for the calculation.
 
     Returns:
-        float: The flood extension in square kilometers.
+        float: The effective flooded area in square kilometers.
     """
-    if not pre_event_water_mask or not post_event_water_mask:
-        print("WARNING: Both pre-event and post-event water masks are required to calculate flood extension.")
+    if effective_flood_extent_image is None:
+        print("WARNING: Effective flood extent image is None. Cannot calculate flood extension.")
         return 0.0
 
-    # Ensure pixel counts are consistent before calculating extension
-    if not check_same_pixel_count(pre_event_water_mask, post_event_water_mask, aoi):
-        print("WARNING: Pre-event and post-event water masks have different pixel counts. Flood extension calculation might be inaccurate.")
-        # Decide whether to proceed with calculation or return 0.0
-        # For now, we will proceed but warn. If strict consistency is needed, return 0.0 here.
+    # Calculate the area of the effective_flood_extent_image
+    # The utils.calculate_area function already handles the reduction and conversion to km^2
+    flooded_area_sqkm = utils.calculate_area(effective_flood_extent_image, scale=10)
+    
+    print(f"Calculated Effective Flooded Area: {flooded_area_sqkm:.2f} km²")
 
-    # Calculate area of pre and post water masks
-    pre_water_area_sqkm = pre_event_water_mask.multiply(ee.Image.pixelArea()).reduceRegion(
-        reducer=ee.Reducer.sum(),
-        geometry=aoi,
-        scale=10, # Assuming 10m resolution for S2
-        maxPixels=1e9,
-        bestEffort=True
-    ).getInfo().get(pre_event_water_mask.bandNames().get(0).getInfo(), 0) / 1e6
-
-    post_water_area_sqkm = post_event_water_mask.multiply(ee.Image.pixelArea()).reduceRegion(
-        reducer=ee.Reducer.sum(),
-        geometry=aoi,
-        scale=10, # Assuming 10m resolution for S2
-        maxPixels=1e9,
-        bestEffort=True
-    ).getInfo().get(post_event_water_mask.bandNames().get(0).getInfo(), 0) / 1e6
-
-    flood_extension_sqkm = post_water_area_sqkm - pre_water_area_sqkm
-    print(f"Pre-event water area: {pre_water_area_sqkm:.2f} km²")
-    print(f"Post-event water area: {post_water_area_sqkm:.2f} km²")
-    print(f"Calculated Flood Extension: {flood_extension_sqkm:.2f} km²")
-
-    return flood_extension_sqkm
+    return flooded_area_sqkm

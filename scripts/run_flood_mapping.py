@@ -12,9 +12,9 @@ import datetime
 from flood_mapper import authentication, data_ingestion, preprocessing, flood_detection, visualization, utils
 
 
-def main(event_date_str, aoi_geojson_path=None, otsu_aoi_geojson_path=None, sar_search_days=12, s2_search_days=20, 
+def main(event_date_str, aoi_geojson_path=None, otsu_aoi_path=None, sar_search_days=12, s2_search_days=20, 
          export_results=False, asset_id_prefix="project/ee-fid/FloodMappingResults/", 
-         detection_method="both"): # Added detection_method argument
+         detection_method="both"):
     """
     Main function to run the flood mapping process.
 
@@ -22,9 +22,10 @@ def main(event_date_str, aoi_geojson_path=None, otsu_aoi_geojson_path=None, sar_
         event_date_str (str): The date of the flood event in 'YYYY-MM-DD' format.
         aoi_geojson_path (str, optional): Path to a GeoJSON file defining the main Area of Interest.
                                           If None, a default AOI (Lomé) will be used.
-        otsu_aoi_geojson_path (str, optional): Path to a GeoJSON file defining a specific
+        otsu_aoi_path (str, optional): Path to a GeoJSON file defining a specific
                                                 region for Otsu threshold computation.
-                                                If None, the main 'aoi' will be used for Otsu.
+                                                If None, the default Lac Togo polygon will be used internally
+                                                by flood_detection.py.
         sar_search_days (int): Number of days before/after event_date to search for SAR images.
         s2_search_days (int): Number of days before/after event_date to search for Sentinel-2 images.
         export_results (bool): If True, exports flood extent and duration to Google Earth Engine assets.
@@ -35,13 +36,13 @@ def main(event_date_str, aoi_geojson_path=None, otsu_aoi_geojson_path=None, sar_
 
     event_date = ee.Date(event_date_str)
     
-    # Define AOI
+    # Define main AOI
     if aoi_geojson_path:
         try:
             AOI = utils.load_aoi_from_geojson(aoi_geojson_path)
-            print(f"AOI loaded from {aoi_geojson_path}")
+            print(f"Main AOI loaded from {aoi_geojson_path}")
         except ValueError as e:
-            print(f"Error loading AOI from GeoJSON: {e}. Using default AOI.")
+            print(f"Error loading main AOI from GeoJSON: {e}. Using default AOI.")
             AOI = ee.Geometry.Polygon(
                 [[[0.889893, 6.110515],
                   [0.889893, 6.342597],
@@ -49,7 +50,7 @@ def main(event_date_str, aoi_geojson_path=None, otsu_aoi_geojson_path=None, sar_
                   [1.853943, 6.110515],
                   [0.889893, 6.110515]]]
             )
-            print("Using default AOI (Lomé, Togo).")
+            print("Using default main AOI (Lomé, Togo).")
     else:
         AOI = ee.Geometry.Polygon(
             [[[0.889893, 6.110515],
@@ -58,9 +59,22 @@ def main(event_date_str, aoi_geojson_path=None, otsu_aoi_geojson_path=None, sar_
               [1.853943, 6.110515],
               [0.889893, 6.110515]]]
         )
-        print("No AOI GeoJSON path provided. Using default AOI (Lomé, Togo).")
+        print("No main AOI GeoJSON path provided. Using default main AOI (Lomé, Togo).")
 
-    print(f"\nProcessing flood event for {event_date_str} in AOI: {AOI.getInfo()['coordinates']}")
+    # Define Otsu AOI (if provided, otherwise pass None to flood_detection for its default)
+    otsu_aoi_geometry = None
+    if otsu_aoi_path:
+        try:
+            otsu_aoi_geometry = utils.load_aoi_from_geojson(otsu_aoi_path)
+            print(f"Specific Otsu AOI loaded from {otsu_aoi_path}")
+        except ValueError as e:
+            print(f"WARNING: Error loading specific Otsu AOI from GeoJSON: {e}. Flood detection will use its internal default Otsu AOI.")
+            # otsu_aoi_geometry remains None, which will trigger the default in flood_detection.py
+    else:
+        print("No specific Otsu AOI GeoJSON path provided. Flood detection will use its internal default Otsu AOI (Lac Togo).")
+
+
+    print(f"\nProcessing flood event for {event_date_str} in main AOI: {AOI.getInfo()['coordinates']}")
 
     sar_pre_event, sar_post_event = None, None
     s2_pre_event, s2_post_event = None, None
@@ -90,12 +104,17 @@ def main(event_date_str, aoi_geojson_path=None, otsu_aoi_geojson_path=None, sar_
 
             # --- Flood Detection (SAR-based) ---
             print("\n--- Flood Extent Detection (SAR-based) ---")
-            # Pass otsu_aoi_geojson_path to detect_flood_extent
-            s1_flood_extent_image = flood_detection.detect_flood_extent(sar_pre_event, sar_post_event, AOI, otsu_aoi_geojson_path)
+            # Pass otsu_aoi_geometry directly
+            s1_flood_extent_image = flood_detection.detect_flood_extent(
+                pre_event_sar=sar_pre_event, 
+                post_event_sar=sar_post_event, 
+                aoi=AOI, # Main AOI for clipping/context
+                otsu_aoi=otsu_aoi_geometry # Pass the ee.Geometry directly
+            )
             
             if s1_flood_extent_image: # Only refine if initial flood extent was calculated
                 s1_flooded_extend_image = flood_detection.refine_flood_extent_with_topology(s1_flood_extent_image, AOI)
-                s1_flooded_area_sqkm = utils.calculate_area(s1_flooded_extend_image, scale=10)
+                s1_flooded_area_sqkm = flood_detection.calculate_flood_extension(s1_flooded_extend_image, AOI) # Updated call
                 print(f"Calculated effective SAR-based flooded area (after refinement): {s1_flooded_area_sqkm:.2f} km²")
             else:
                 print("SAR-based flood extent not calculated due to inconsistent pixel counts or other issues.")
@@ -129,12 +148,11 @@ def main(event_date_str, aoi_geojson_path=None, otsu_aoi_geojson_path=None, sar_
             print("Sentinel-2 data prepared and NDWI calculated.")
 
             # -------------Detect flood extent using NDWI---------------
-            # Pass AOI to detect_flood_extent_s2_ndwi
             s2_flood_extent_image = flood_detection.detect_flood_extent_s2_ndwi(ndwi_pre_event_mask, ndwi_post_event_mask, AOI)
             
             if s2_flood_extent_image: # Only refine if initial flood extent was calculated
                 s2_flooded_extent_image = flood_detection.refine_flood_extent_with_topology(s2_flood_extent_image, AOI)
-                s2_flooded_area_sqkm = utils.calculate_area(s2_flooded_extent_image, scale=10)
+                s2_flooded_area_sqkm = flood_detection.calculate_flood_extension(s2_flooded_extent_image, AOI) # Updated call
                 print(f"Calculated Sentinel-2 NDWI-based flooded area: {s2_flooded_area_sqkm:.2f} km²")
             else:
                 print("Sentinel-2 NDWI-based flood extent not calculated due to inconsistent pixel counts or other issues.")
@@ -155,37 +173,15 @@ def main(event_date_str, aoi_geojson_path=None, otsu_aoi_geojson_path=None, sar_
 
     # --- Print Water Area Estimates ---
     print("\nWater Area Estimates (in km²):")
-    if detection_method in ["s2", "both"] and ndwi_pre_event_mask and ndwi_post_event_mask:
-        # Calculate water areas only if S2 processing was attempted and successful
-        water_area_pre_event_mask = utils.calculate_area(ndwi_pre_event_mask, scale=10)
-        water_area_post_event_mask = utils.calculate_area(ndwi_post_event_mask, scale=10)
-        print(f"Pre-event Water Area (NDWI)   : {water_area_pre_event_mask:.2f} km²")
-        print(f"Post-event Water Area (NDWI)  : {water_area_post_event_mask:.2f} km²")
+    if detection_method in ["s2", "both"] and s2_flooded_extent_image: # Only print if S2 flood extent was calculated
         print(f"Flood Extent (Sentinel-2 NDWI): {s2_flooded_area_sqkm:.2f} km²")
     else:
-        print("Sentinel-2 Water Areas        : N/A (S2 processing skipped or failed)")
+        print("Sentinel-2 Flood Areas        : N/A (S2 processing skipped or failed)")
 
     if detection_method in ["sar", "both"] and s1_flooded_extend_image:
         print(f"Effective Flooded Area (SAR)  : {s1_flooded_area_sqkm:.2f} km²")
     else:
         print("SAR-based Flood Areas         : N/A (SAR processing skipped or failed)")
-
-
-    # --- Flood Duration (Conceptual - requires more data or logic) ---
-    # For a robust flood duration, you'd need a time-series of flood extent maps.
-    # The current notebook calculates change for a single pre/post pair.
-    # To implement duration, you would need to process multiple SAR pairs or S2 images
-    # over a longer period and sum up the 'flooded' days for each pixel.
-    # For now, let's just make a placeholder.
-    flood_duration_image = None
-    # If SAR-based flood extent was calculated, use it for duration placeholder
-    if s1_flooded_extend_image: 
-        flood_duration_image = s1_flooded_extend_image.multiply(1).rename('flood_duration_days') 
-    # Otherwise, if S2-based flood extent was calculated, use it
-    elif s2_flooded_extent_image:
-        flood_duration_image = s2_flooded_extent_image.multiply(1).rename('flood_duration_days')
-
-    print("\n--- Precipitation Forecast: Module removed as per user request. ---")
 
 
     # --- Visualization ---
@@ -229,12 +225,6 @@ def main(event_date_str, aoi_geojson_path=None, otsu_aoi_geojson_path=None, sar_
             utils.export_image_to_asset(s2_flooded_extent_image, export_description_s2_extent, asset_id_prefix, AOI)
         else:
             print("No Sentinel-2 NDWI flood extent to export based on selection or availability.")
-
-        if flood_duration_image: # Export flood duration (if calculated)
-            export_description_duration = f"Flood_Duration_{event_date_str.replace('-', '')}_{current_date_time}"
-            utils.export_image_to_asset(flood_duration_image, export_description_duration, asset_id_prefix, AOI)
-        else:
-            print("No flood duration image to export.")
             
     else:
         print("\nSkipping export of results as 'export_results' is False.")
@@ -248,8 +238,8 @@ if __name__ == "__main__":
                         help="Date of the flood event (YYYY-MM-DD).")
     parser.add_argument("--aoi_path", type=str,
                         help="Path to a GeoJSON file defining the Area of Interest. Optional.")
-    parser.add_argument("--otsu_aoi_path", type=str, # Added argument for Otsu AOI
-                        help="Path to a GeoJSON file for Otsu threshold calculation. Optional. If not provided, a default AOI is used.")
+    parser.add_argument("--otsu_aoi_path", type=str,
+                        help="Path to a GeoJSON file for Otsu threshold calculation. Optional. If not provided, flood_detection.py will use its internal default.")
     parser.add_argument("--sar_search_days", type=int, default=12,
                         help="Number of days before/after event date to search for Sentinel-1 images.")
     parser.add_argument("--s2_search_days", type=int, default=20,
@@ -267,11 +257,10 @@ if __name__ == "__main__":
     main(
         event_date_str=args.event_date,
         aoi_geojson_path=args.aoi_path,
-        otsu_aoi_geojson_path=args.otsu_aoi_path,
+        otsu_aoi_path=args.otsu_aoi_path, # Pass the path, main will handle loading to ee.Geometry
         sar_search_days=args.sar_search_days,
         s2_search_days=args.s2_search_days,
         export_results=args.export,
         asset_id_prefix=args.asset_id_prefix,
         detection_method=args.detection_method
     )
-
