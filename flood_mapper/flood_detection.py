@@ -10,7 +10,7 @@ It is designed to work with Google Earth Engine (GEE) and requires the GEE libra
 import ee
 import numpy as np
 import matplotlib.pyplot as plt
-from flood_mapper.utils import check_same_pixel_count, load_aoi_from_geojson
+from flood_mapper.utils import check_same_pixel_count, load_aoi_from_geojson, calculate_area
 
 def compute_otsu_threshold(image, band_name, otsu_aoi, scale=30, bins=256, plot=False):
     """
@@ -170,7 +170,7 @@ def detect_flood_extent_s2_ndwi(pre_event_ndwi_mask, post_event_ndwi_mask, aoi):
     # Detect new flood areas (water_post AND NOT water_pre)
     # The result will inherently only contain pixels common to both original images if common_mask was applied
     flood_extent_ndwi = post_event_ndwi_mask_for_processing.And(pre_event_ndwi_mask_for_processing.Not()).rename('flood_extent_ndwi')
-
+    
     return flood_extent_ndwi
 
 def refine_flood_extent_with_topology(flooded_area_image, aoi, min_connected_pixels=8, max_slope_percent=5):
@@ -212,7 +212,8 @@ def refine_flood_extent_with_topology(flooded_area_image, aoi, min_connected_pix
     
     return flooded_area_conn_topo.rename('effective_flood_extent')
 
-def calculate_flood_extension(effective_flood_extent_image, aoi):
+
+def calculate_flood_extension(effective_flood_extent_image):
     """
     Calculates the area of the refined flood extent.
 
@@ -225,12 +226,12 @@ def calculate_flood_extension(effective_flood_extent_image, aoi):
         float: The effective flooded area in square kilometers.
     """
     if effective_flood_extent_image is None:
-        print("WARNING: Effective flood extent image is None. Cannot calculate flood extension.")
-        return 0.0
+        print("WARNING: Effective flood extent image is None. Cannot calculate flood extension area.")
+        return None
 
     # Calculate the area of the effective_flood_extent_image
     # The utils.calculate_area function already handles the reduction and conversion to km^2
-    flooded_area_sqkm = utils.calculate_area(effective_flood_extent_image, scale=10)
+    flooded_area_sqkm = calculate_area(effective_flood_extent_image, scale=10)
     
     print(f"Calculated Effective Flooded Area: {flooded_area_sqkm:.2f} km²")
 

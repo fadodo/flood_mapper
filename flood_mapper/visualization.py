@@ -13,7 +13,7 @@ It is designed to work with the geemap library and Google Earth Engine (GEE).
 import geemap
 import ee
 
-def create_map(center_coords, zoom=7):
+def create_map(center_coords, zoom=8):
     """
     Creates and returns a geemap.Map object.
 

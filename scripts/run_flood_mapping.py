@@ -189,6 +189,12 @@ def main(event_date_str, aoi_geojson_path=None, otsu_aoi_path=None, sar_search_d
     map_center = AOI.centroid().coordinates().getInfo()[::-1] # [lon, lat] -> [lat, lon]
     m = visualization.create_map(map_center)
 
+    # Add Main AOI to the map
+    m.addLayer(AOI, {'color': 'blue', 'fillColor': '00000000'}, 'Main AOI')
+    # Add Otsu AOI to the map if it was provided
+    if otsu_aoi_geometry:
+        m.addLayer(otsu_aoi_geometry, {'color': 'green', 'fillColor': '00000000'}, 'Otsu AOI')
+
     if detection_method in ["sar", "both"] and sar_pre_event and sar_post_event:
         visualization.add_sar_layers(m, sar_pre_event, sar_post_event)
     
