@@ -1,2 +1,0 @@
-[console_scripts]
-run_flood_mapping = scripts.run_flood_mapping:main
