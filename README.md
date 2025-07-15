@@ -34,7 +34,7 @@ The `flood_mapper` package is a Python-based tool designed for rapid and flexibl
 1. **Clone the repository:**
 
    ```
-   git clone [https://github.com/your-username/flood_mapper.git](https://github.com/your-username/flood_mapper.git)
+   git clone [https://github.com/fadodo/flood_mapper.git](https://github.com/fado/flood_mapper.git)
    cd flood_mapper
    
    ```
@@ -70,7 +70,7 @@ The `flood_mapper` package is a Python-based tool designed for rapid and flexibl
 
 ## Usage
 
-The main script for running flood mapping is `scripts/run_flood_mapping.py`.
+The main script for running flood mapping is `scripts/run_flood_mapping.py` or `scripts/run_flood_mapping.ipynb`
 
 ```
 python scripts/run_flood_mapping.py --help
@@ -85,6 +85,7 @@ To run flood detection using both SAR and Sentinel-2 data for a specific event d
 python scripts/run_flood_mapping.py \
     --event_date 2025-06-02 \
     --aoi_path /path/to/your/aoi.geojson \
+    --otsu_aoi /path/to/your/aoi.geojson \
     --export \
     --asset_id_prefix "users/your_username/my_flood_maps/" \
     --detection_method both
@@ -125,6 +126,20 @@ pytest
 ```
 
 Ensure your GEE authentication is set up correctly as tests interact with the GEE API.
+
+## Accuracy Considerations
+
+The accuracy of the flooded area calculation can be influenced by several factors inherent to the satellite data and processing methods:
+
+- **Sentinel-2 (Optical) Data**:
+      - **Cloud Cover**: The primary limitation for Sentinel-2 is the presence of clouds. Clouds and cloud shadows can obscure the ground, leading to underestimation of flooded areas or false positives if shadows are misidentified as water. Clear-sky images are crucial for reliable detection.
+
+- **Sentinel-1 (SAR) Data**:
+        - **Otsu Threshold Determination**: While SAR can penetrate clouds, the accuracy of flood detection heavily relies on the precise determination of the Otsu threshold. This threshold differentiates water from land based on backscatter values. Factors like vegetation, urban areas, and varying water surface conditions can affect backscatter, making a universally optimal threshold challenging and potentially leading to misclassifications.
+
+## Verification Status
+The core flood detection logic, including SAR-based (Otsu thresholding) and Sentinel-2 NDWI-based methods, has been refined to ensure robust calculations even when pre- and post-event image pixel counts differ. This is achieved by performing operations on a common mask of available pixels. The `calculate_flood_extension` function now accurately computes the flooded area using the refined flood extent. The visualization now correctly displays both the main Area of Interest (AOI) and the specific Otsu AOI on the map, aiding in verification and understanding of the analysis extent.
+
 
 ## Contributing
 

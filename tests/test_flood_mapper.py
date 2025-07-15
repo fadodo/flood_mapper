@@ -10,9 +10,6 @@ import ee
 import numpy as np 
 from flood_mapper import authentication, data_ingestion, preprocessing, flood_detection, utils
 
-# Removed explicit import of Geometry and Date from ee.
-# Will use ee.Geometry and ee.Date directly.
-
 # Fixture for initializing GEE (run once for all tests)
 @pytest.fixture(scope="module", autouse=True)
 def ee_init():
@@ -137,29 +134,28 @@ def test_detect_flood_extent(ee_init): # Depend on ee_init
     test_aoi = ee.Geometry.Polygon( 
         [[[1.0, 6.0], [1.5, 6.0], [1.5, 6.5], [1.0, 6.5], [1.0, 6.0]]]
     )
-    
-    # Create dummy pre_s1_smooth and post_s1_smooth images that are guaranteed
-    # to have the same pixel count within a defined region.
-    # This avoids reliance on actual GEE data availability and pixel count variations.
-    clip_region = test_aoi.centroid().buffer(5000)
-    
-    # Create a dummy constant image over the clip_region for pre-event
-    # We'll use a value that would typically be 'land' (e.g., -15 dB)
-    pre_s1_smooth = ee.Image.constant(-15).rename('VH').clip(clip_region)
-    
-    # Create another dummy constant image over the same region for post-event
-    # We'll use a value that would typically be 'water' (e.g., -25 dB)
-    post_s1_smooth = ee.Image.constant(-25).rename('VH').clip(clip_region)
+    s1_collection = data_ingestion.get_sentinel1_collection(
+        test_aoi, test_event_date.advance(-15, 'day'), test_event_date.advance(15, 'day') # Extend search to find images
+    )
+    pre_s1 = s1_collection.filterDate(test_event_date.advance(-15, 'day'), test_event_date).sort('system:time_start', False).first()
+    post_s1 = s1_collection.filterDate(test_event_date, test_event_date.advance(15, 'day')).first()
 
-    # Use keyword arguments for clarity and to avoid the TypeError
-    # Pass the clip_region as the aoi for detect_flood_extent, and None for otsu_aoi_geojson_path
+    if not pre_s1 or not post_s1:
+        pytest.skip("Could not find sufficient pre/post SAR images for flood detection test.")
+    
+    clip_region = test_aoi.centroid().buffer(5000)
+    pre_s1_smooth = preprocessing.speckle_smoothing(pre_s1.select('VH')).clip(clip_region)
+    post_s1_smooth = preprocessing.speckle_smoothing(post_s1.select('VH')).clip(clip_region)
+
+    # Explicitly pass otsu_aoi as an ee.Geometry.Polygon or None
+    # Using test_aoi for otsu_aoi in the test for simplicity
     flood_map = flood_detection.detect_flood_extent(
         pre_event_sar=pre_s1_smooth, 
         post_event_sar=post_s1_smooth, 
-        otsu_aoi_geojson_path=None # Explicitly pass None to use default Otsu AOI logic within flood_detection
+        aoi=test_aoi, 
+        otsu_aoi=test_aoi.centroid().buffer(100) # Use a small buffer for Otsu AOI in test
     )
     
-    # Now, flood_map should be an ee.Image because pixel counts are consistent.
     assert isinstance(flood_map, ee.Image), "Flood map should be an ee.Image."
     assert flood_map.bandNames().getInfo() == ['flood_extent_sar'], "Flood map should have 'flood_extent_sar' band."
 
@@ -170,6 +166,7 @@ def test_detect_flood_extent(ee_init): # Depend on ee_init
         scale=30,
         maxPixels=1e9
     ).getInfo()
+    
     assert sum_pixels['flood_extent_sar'] is not None, "SAR flood extent sum should not be None."
     assert sum_pixels['flood_extent_sar'] > 0, "SAR flood extent should detect some flooded area with dummy data."
 
@@ -186,15 +183,13 @@ def test_detect_flood_extent_s2_ndwi(ee_init): # Depend on ee_init
     pre_ndwi_mask = lon.lt(1.2).And(lat.lt(6.25)).rename('ndwi_water_pre')
     post_ndwi_mask = lon.gt(1.3).And(lat.gt(6.25)).Or(lon.lt(1.2).And(lat.lt(6.25))).rename('ndwi_water_post')
 
-    # Use keyword arguments for clarity and to avoid the TypeError
+    # Correctly pass the 'aoi' argument
     s2_flood_map = flood_detection.detect_flood_extent_s2_ndwi(
         pre_event_ndwi_mask=pre_ndwi_mask, 
         post_event_ndwi_mask=post_ndwi_mask, 
-        aoi=test_aoi
+        aoi=test_aoi # Add the missing aoi argument
     )
     
-    # If s2_flood_map is None due to pixel count inconsistency, this assert will fail.
-    # This is expected behavior if the check_same_pixel_count returns False.
     assert isinstance(s2_flood_map, ee.Image), "S2 flood map should be an ee.Image."
     assert s2_flood_map.bandNames().getInfo() == ['flood_extent_ndwi'], "S2 flood map should have 'flood_extent_ndwi' band."
 
@@ -243,15 +238,13 @@ def test_calculate_area(ee_init): # Depend on ee_init
     
     calculated_area = utils.calculate_area(dummy_image, scale=scale_m)
     
-    # Increased tolerance slightly for floating point comparisons
     assert abs(calculated_area - expected_area_sq_km) < 0.005, f"Calculated area {calculated_area:.4f} km² differs significantly from expected {expected_area_sq_km:.4f} km²."
 
 
 def test_load_aoi_from_geojson(tmp_path, ee_init):
     """Test loading AOI from a GeoJSON file."""
     print(f"\n--- DEBUG: test_load_aoi_from_geojson ---")
-    # Directly use ee.Geometry.Polygon for type checking
-    print(f"Type of ee.Geometry.Polygon: {type(ee.Geometry.Polygon)}") 
+    print(f"Type of ee.Geometry.Polygon: {type(ee.Geometry.Polygon)}") # Debug print
     geojson_content = {
         "type": "FeatureCollection",
         "features": [
@@ -272,9 +265,7 @@ def test_load_aoi_from_geojson(tmp_path, ee_init):
     
     aoi = utils.load_aoi_from_geojson(str(geojson_path))
     
-    # Robust type check: check if it's an ee.Geometry object and then its type name
     assert isinstance(aoi, ee.Geometry), "Loaded AOI should be an ee.Geometry object."
-    # The .name() method is not standard for ee.Geometry. Use .type() to get the GeoJSON type string.
     assert aoi.type().getInfo() == 'Polygon', "Loaded AOI should be an ee.Geometry.Polygon."
     assert aoi.coordinates().getInfo() == [[[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0], [-1.0, -1.0]]], "AOI coordinates mismatch."
 

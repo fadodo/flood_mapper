@@ -13,7 +13,7 @@ from flood_mapper import authentication, data_ingestion, preprocessing, flood_de
 
 
 def main(event_date_str, aoi_geojson_path=None, otsu_aoi_path=None, sar_search_days=12, s2_search_days=20, 
-         export_results=False, asset_id_prefix="project/ee-fid/FloodMappingResults/", 
+         export_results=False, asset_id_prefix="project/your-username/FloodMappingResults/", 
          detection_method="both"):
     """
     Main function to run the flood mapping process.
@@ -80,6 +80,9 @@ def main(event_date_str, aoi_geojson_path=None, otsu_aoi_path=None, sar_search_d
     s2_pre_event, s2_post_event = None, None
     ndwi_pre_event_mask, ndwi_post_event_mask = None, None
 
+    # New variables to store pre/post water masks from SAR
+    water_pre_sar, water_post_sar = None, None
+
     s1_flood_extent_image = None
     s1_flooded_extend_image = None 
     s1_flooded_area_sqkm = 0.0
@@ -104,8 +107,8 @@ def main(event_date_str, aoi_geojson_path=None, otsu_aoi_path=None, sar_search_d
 
             # --- Flood Detection (SAR-based) ---
             print("\n--- Flood Extent Detection (SAR-based) ---")
-            # Pass otsu_aoi_geometry directly
-            s1_flood_extent_image = flood_detection.detect_flood_extent(
+            # Capture all three returned values
+            water_pre_sar, water_post_sar, s1_flood_extent_image = flood_detection.detect_flood_extent(
                 pre_event_sar=sar_pre_event, 
                 post_event_sar=sar_post_event, 
                 aoi=AOI, # Main AOI for clipping/context
@@ -114,7 +117,7 @@ def main(event_date_str, aoi_geojson_path=None, otsu_aoi_path=None, sar_search_d
             
             if s1_flood_extent_image: # Only refine if initial flood extent was calculated
                 s1_flooded_extend_image = flood_detection.refine_flood_extent_with_topology(s1_flood_extent_image, AOI)
-                s1_flooded_area_sqkm = flood_detection.calculate_flood_extension(s1_flooded_extend_image, AOI) # Updated call
+                s1_flooded_area_sqkm = flood_detection.calculate_flood_extension(s1_flooded_extend_image) 
                 print(f"Calculated effective SAR-based flooded area (after refinement): {s1_flooded_area_sqkm:.2f} km²")
             else:
                 print("SAR-based flood extent not calculated due to inconsistent pixel counts or other issues.")
@@ -122,10 +125,12 @@ def main(event_date_str, aoi_geojson_path=None, otsu_aoi_path=None, sar_search_d
         except ValueError as e:
             print(f"Sentinel-1 processing skipped due to: {e}")
             sar_pre_event, sar_post_event = None, None
+            water_pre_sar, water_post_sar = None, None # Ensure these are None on error
             s1_flood_extent_image = None
             s1_flooded_extend_image = None
         except Exception as e:
             print(f"Error during SAR flood extent detection or refinement: {e}")
+            water_pre_sar, water_post_sar = None, None # Ensure these are None on error
             s1_flood_extent_image = None
             s1_flooded_extend_image = None
     else:
@@ -152,7 +157,7 @@ def main(event_date_str, aoi_geojson_path=None, otsu_aoi_path=None, sar_search_d
             
             if s2_flood_extent_image: # Only refine if initial flood extent was calculated
                 s2_flooded_extent_image = flood_detection.refine_flood_extent_with_topology(s2_flood_extent_image, AOI)
-                s2_flooded_area_sqkm = flood_detection.calculate_flood_extension(s2_flooded_extent_image, AOI) # Updated call
+                s2_flooded_area_sqkm = flood_detection.calculate_flood_extension(s2_flooded_extent_image)
                 print(f"Calculated Sentinel-2 NDWI-based flooded area: {s2_flooded_area_sqkm:.2f} km²")
             else:
                 print("Sentinel-2 NDWI-based flood extent not calculated due to inconsistent pixel counts or other issues.")
@@ -173,7 +178,7 @@ def main(event_date_str, aoi_geojson_path=None, otsu_aoi_path=None, sar_search_d
 
     # --- Print Water Area Estimates ---
     print("\nWater Area Estimates (in km²):")
-    if detection_method in ["s2", "both"] and s2_flooded_extent_image: # Only print if S2 flood extent was calculated
+    if detection_method in ["s2", "both"] and s2_flooded_extent_image: 
         print(f"Flood Extent (Sentinel-2 NDWI): {s2_flooded_area_sqkm:.2f} km²")
     else:
         print("Sentinel-2 Flood Areas        : N/A (S2 processing skipped or failed)")
@@ -189,14 +194,15 @@ def main(event_date_str, aoi_geojson_path=None, otsu_aoi_path=None, sar_search_d
     map_center = AOI.centroid().coordinates().getInfo()[::-1] # [lon, lat] -> [lat, lon]
     m = visualization.create_map(map_center)
 
-    # Add Main AOI to the map
-    m.addLayer(AOI, {'color': 'blue', 'fillColor': '00000000'}, 'Main AOI')
-    # Add Otsu AOI to the map if it was provided
-    if otsu_aoi_geometry:
-        m.addLayer(otsu_aoi_geometry, {'color': 'green', 'fillColor': '00000000'}, 'Otsu AOI')
-
     if detection_method in ["sar", "both"] and sar_pre_event and sar_post_event:
         visualization.add_sar_layers(m, sar_pre_event, sar_post_event)
+
+    # Add pre-event and post-event SAR water masks
+    if detection_method in ["sar", "both"] and water_pre_sar and water_post_sar:
+        # Use updateMask to ensure only the water pixels are visible
+        visualization.add_sar_layers(m, water_pre_sar.updateMask(water_pre_sar), water_post_sar.updateMask(water_post_sar), 
+                                     layer_names=['Pre-event SAR Water', 'Post-event SAR Water'],
+                                     vis_params={'min': 0, 'max': 1, 'palette': ['white', 'blue']})
     
     if detection_method in ["s2", "both"] and ndwi_pre_event_mask and ndwi_post_event_mask:
         visualization.add_ndwi_layers(m, ndwi_pre_event_mask, ndwi_post_event_mask)
@@ -208,9 +214,6 @@ def main(event_date_str, aoi_geojson_path=None, otsu_aoi_path=None, sar_search_d
     # Add S2-based flood extent layer
     if detection_method in ["s2", "both"] and s2_flooded_extent_image:
         visualization.add_s2_flood_extent_layer(m, s2_flooded_extent_image, zoom_to_layer=True) # Zoom to S2 flood extent if available
-
-    if flood_duration_image:
-        visualization.add_flood_duration_layer(m, flood_duration_image)
     
     print("\nMap ready for display (if in a Jupyter environment) or for export.")
 

@@ -128,9 +128,11 @@ def detect_flood_extent(pre_event_sar, post_event_sar, aoi, otsu_aoi=None):
 
     # Detect new flood areas (water_post AND NOT water_pre)
     # The result will inherently only contain pixels common to both original images if common_mask was applied
-    flood_extent = water_post.And(water_pre.Not()).rename('flood_extent_sar')
+    #flood_extent = water_sar_post.And(water_sar_pre.Not()).rename('flood_extent_sar')
+    # selfMask() will mask out pixels where the result is 0 or negative (i.e., no new water)
+    flood_extent = water_post.subtract(water_pre).selfMask().rename('flood_extent_sar')
 
-    return flood_extent
+    return water_pre, water_post, flood_extent
 
 def detect_flood_extent_s2_ndwi(pre_event_ndwi_mask, post_event_ndwi_mask, aoi): 
     """
@@ -166,10 +168,14 @@ def detect_flood_extent_s2_ndwi(pre_event_ndwi_mask, post_event_ndwi_mask, aoi):
         post_event_ndwi_mask_for_processing = post_event_ndwi_mask.updateMask(common_mask)
     else:
         print("Pre-event and post-event NDWI masks have consistent pixel counts.")
+        # No masking needed if counts are consistent, use original images for processing
         
     # Detect new flood areas (water_post AND NOT water_pre)
     # The result will inherently only contain pixels common to both original images if common_mask was applied
-    flood_extent_ndwi = post_event_ndwi_mask_for_processing.And(pre_event_ndwi_mask_for_processing.Not()).rename('flood_extent_ndwi')
+    #flood_extent_ndwi = post_event_ndwi_mask_for_processing.And(pre_event_ndwi_mask_for_processing.Not()).rename('flood_extent_ndwi') 
+
+    # selfMask() will mask out pixels where the result is 0 or negative (i.e., no new water)
+    flood_extent_ndwi = post_event_ndwi_mask_for_processing.subtract(pre_event_ndwi_mask_for_processing).selfMask().rename('flood_extent_ndwi')
     
     return flood_extent_ndwi
 

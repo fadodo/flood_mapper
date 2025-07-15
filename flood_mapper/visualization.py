@@ -1,138 +1,98 @@
 
-#!/usr/bin/env python3
-#visualization.py
+# visualization.py
 """
-This module provides functions to create and manipulate a geemap.Map object for visualizing
-flood detection data. It includes functionality to add Sentinel-1 SAR layers, NDWI water
-masks, flood extent, and flood duration layers to the map. The map can be centered 
-on specific coordinates and zoomed to a specified level.
-It is designed to work with the geemap library and Google Earth Engine (GEE).
-""" 
+This module provides functions for visualizing satellite imagery and flood maps
+using the geemap library, which integrates with Google Earth Engine.
+"""
 
-
-import geemap
 import ee
+import geemap
 
-def create_map(center_coords, zoom=8):
+def create_map(center_coords=[0, 0], zoom=8):
     """
-    Creates and returns a geemap.Map object.
+    Creates an interactive geemap map centered at specified coordinates with a given zoom level.
 
     Args:
-        center_coords (list): [latitude, longitude] for map center.
-        zoom (int): Initial zoom level.
+        center_coords (list): A list of [latitude, longitude] for the map center.
+        zoom (int): The initial zoom level for the map.
 
     Returns:
-        geemap.Map: The initialized map object.
+        geemap.Map: An interactive geemap map object.
     """
-    map_obj = geemap.Map(center=center_coords, zoom=zoom)
-    map_obj.add_basemap("HYBRID")
-    return map_obj
+    m = geemap.Map(center=center_coords, zoom=zoom)
+    m.add_basemap('HYBRID') # Add a satellite basemap
+    return m
 
-def add_sar_layers(map_obj, pre_event_sar, post_event_sar):
+def add_sar_layers(m, pre_event_sar, post_event_sar, layer_names=None, vis_params=None):
     """
-    Adds pre- and post-event SAR images to the map.
+    Adds pre-event and post-event SAR images to the map.
 
     Args:
-        map_obj (geemap.Map): The map object.
-        pre_event_sar (ee.Image): Pre-event smoothed SAR image.
-        post_event_sar (ee.Image): Post-event smoothed SAR image.
+        m (geemap.Map): The geemap map object.
+        pre_event_sar (ee.Image): The pre-event SAR image (e.g., 'VH' band).
+        post_event_sar (ee.Image): The post-event SAR image (e.g., 'VH' band).
+        layer_names (list, optional): A list of two strings for layer names [pre_name, post_name].
+                                      Defaults to ['Pre-event SAR', 'Post-event SAR'].
+        vis_params (dict, optional): A dictionary of visualization parameters for the SAR images.
+                                     Defaults to {'min': -25, 'max': 0}.
     """
-    sar_vis_params = {'bands': ['VH'], 'min': -25, 'max': 0}
-    map_obj.addLayer(pre_event_sar, sar_vis_params, 'Pre-event SAR (Smoothed)')
-    map_obj.addLayer(post_event_sar, sar_vis_params, 'Post-event SAR (Smoothed)')
-    print("Added pre- and post-event SAR layers to the map.")
+    if layer_names is None:
+        layer_names = ['Pre-event SAR', 'Post-event SAR']
+    if vis_params is None:
+        vis_params = {'bands':['VH'], 'min': -25, 'max': 0} # Default for SAR backscatter in dB
 
-def add_ndwi_layers(map_obj, pre_event_ndwi_mask, post_event_ndwi_mask):
+    if pre_event_sar:
+        m.addLayer(pre_event_sar, vis_params, layer_names[0])
+    if post_event_sar:
+        m.addLayer(post_event_sar, vis_params, layer_names[1])
+
+def add_ndwi_layers(m, pre_event_ndwi_mask, post_event_ndwi_mask):
     """
-    Adds pre- and post-event NDWI masks to the map.
+    Adds pre-event and post-event NDWI masks to the map.
 
     Args:
-        map_obj (geemap.Map): The map object.
-        pre_event_ndwi_mask (ee.Image): Pre-event NDWI water mask.
-        post_event_ndwi_mask (ee.Image): Post-event NDWI water mask.
+        m (geemap.Map): The geemap map object.
+        pre_event_ndwi_mask (ee.Image): The binary pre-event NDWI water mask.
+        post_event_ndwi_mask (ee.Image): The binary post-event NDWI water mask.
     """
-    ndwi_vis_params = {"palette": ["blue"]} # Changed to blue for water
-    map_obj.addLayer(pre_event_ndwi_mask.updateMask(pre_event_ndwi_mask), ndwi_vis_params, "Pre-flood Water (NDWI)")
-    map_obj.addLayer(post_event_ndwi_mask.updateMask(post_event_ndwi_mask), ndwi_vis_params, "Post-flood Water (NDWI)")
-    print("Added pre- and post-event NDWI water masks to the map.")
+    ndwi_vis_params = {'min': 0, 'max': 1, 'palette': ['white', 'blue']}
+    if pre_event_ndwi_mask:
+        m.addLayer(pre_event_ndwi_mask.updateMask(pre_event_ndwi_mask), ndwi_vis_params, 'Pre-event NDWI Water')
+    if post_event_ndwi_mask:
+        m.addLayer(post_event_ndwi_mask.updateMask(post_event_ndwi_mask), ndwi_vis_params, 'Post-event NDWI Water')
 
-def add_flood_extent_layer(map_obj, flood_extent_image, zoom_to_layer=True):
+def add_effective_flood_extent_layer(m, effective_flood_extent, zoom_to_layer=True):
     """
-    Adds the computed flood extent layer to the map.
+    Adds the refined SAR flood extent layer to the map.
 
     Args:
-        map_obj (geemap.Map): The map object.
-        flood_extent_image (ee.Image): Binary image representing flood extent.
-        zoom_to_layer (bool): If True, centers the map on the flood extent.
+        m (geemap.Map): The geemap map object.
+        effective_flood_extent (ee.Image): The refined binary flood extent image.
+        zoom_to_layer (bool): If True, zooms the map to the extent of the layer.
     """
-    flood_vis_params = {"palette": ["red"]}
-    map_obj.addLayer(flood_extent_image.updateMask(flood_extent_image), flood_vis_params, 'Initial Flood Extent (SAR)')
-    if zoom_to_layer:
-        map_obj.centerObject(flood_extent_image)
-    print("Added initial flood extent layer to the map.")
+    flood_vis_params = {'palette': ['red']}
+    if effective_flood_extent:
+        m.addLayer(effective_flood_extent.updateMask(effective_flood_extent), flood_vis_params, 'Effective Flood Extent (SAR)')
+        if zoom_to_layer:
+            m.centerObject(effective_flood_extent)
 
-def add_effective_flood_extent_layer(map_obj, effective_flood_extent_image, zoom_to_layer=True):
+def add_s2_flood_extent_layer(m, s2_flood_extent_image, zoom_to_layer=True):
     """
-    Adds the refined (effective) flood extent layer to the map.
+    Adds the Sentinel-2 NDWI flood extent layer to the map.
 
     Args:
-        map_obj (geemap.Map): The map object.
-        effective_flood_extent_image (ee.Image): Refined binary image representing flood extent.
-        zoom_to_layer (bool): If True, centers the map on the effective flood extent.
+        m (geemap.Map): The geemap map object.
+        s2_flood_extent_image (ee.Image): The binary S2 NDWI flood extent image.
+        zoom_to_layer (bool): If True, zooms the map to the extent of the layer.
     """
-    effective_flood_vis_params = {"palette": ["purple"]} # A different color for effective flood
-    map_obj.addLayer(effective_flood_extent_image.updateMask(effective_flood_extent_image), effective_flood_vis_params, 'Effective Flood Extent (SAR Refined)')
-    if zoom_to_layer:
-        map_obj.centerObject(effective_flood_extent_image)
-    print("Added effective flood extent layer to the map.")
+    s2_flood_vis_params = {'palette': ['purple']}
+    if s2_flood_extent_image:
+        m.addLayer(s2_flood_extent_image.updateMask(s2_flood_extent_image), s2_flood_vis_params, 'Flood Extent (S2 NDWI)')
+        if zoom_to_layer:
+            m.centerObject(s2_flood_extent_image)
 
-def add_s2_flood_extent_layer(map_obj, s2_flood_extent_image, zoom_to_layer=False):
-    """
-    Adds the Sentinel-2 NDWI-based flood extent layer to the map.
-
-    Args:
-        map_obj (geemap.Map): The map object.
-        s2_flood_extent_image (ee.Image): Binary image representing flood extent from NDWI.
-        zoom_to_layer (bool): If True, centers the map on the S2 flood extent.
-    """
-    s2_flood_vis_params = {"palette": ["green"]} # A distinct color for S2 flood
-    map_obj.addLayer(s2_flood_extent_image.updateMask(s2_flood_extent_image), s2_flood_vis_params, 'Flood Extent (Sentinel-2 NDWI)')
-    if zoom_to_layer:
-        map_obj.centerObject(s2_flood_extent_image)
-    print("Added Sentinel-2 NDWI-based flood extent layer to the map.")
-
-
-def add_flood_duration_layer(map_obj, flood_duration_image):
-    """
-    Adds the computed flood duration layer to the map.
-
-    Args:
-        map_obj (geemap.Map): The map object.
-        flood_duration_image (ee.Image): Image representing flood duration.
-    """
-    duration_vis_params = {
-        'min': 0, 'max': 30, 'palette': ['white', 'blue', 'darkblue'] # Example palette
-    }
-    map_obj.addLayer(flood_duration_image, duration_vis_params, 'Flood Duration (Days)')
-    print("Added flood duration layer to the map.")
-
-def add_cpc_forecast_layer(map_obj, forecast_image):
-    """
-    Adds the CPC forecast precipitation layer to the map.
-
-    Args:
-        map_obj (geemap.Map): The map object.
-        forecast_image (ee.Image): The CPC forecast precipitation image.
-    """
-    if forecast_image:
-        precip_vis_params = {'min': 0, 'max': 50, 'palette': ['blue', 'green', 'yellow', 'orange', 'red']}
-        map_obj.addLayer(forecast_image, precip_vis_params, 'CPC Forecast Precipitation')
-        print("Added CPC Forecast Precipitation layer to the map.")
-    else:
-        print("No CPC forecast image to add to map.")
-
-def display_map(map_obj):
+def display_map(m):
     """
     Displays the geemap map.
     """
-    return map_obj
+    return m
