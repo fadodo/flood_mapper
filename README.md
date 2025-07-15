@@ -39,7 +39,7 @@ The `flood_mapper` package is a Python-based tool designed for rapid and flexibl
    
    ```
 
-   (Replace `your-username` with your actual GitHub username)
+ 
 
 2. **Set up a virtual environment (recommended):**
 
