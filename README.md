@@ -1,5 +1,7 @@
 # Flood Mapper Package
 
+ [Quick Start Documentation](https://fadodo.github.io/event/flood_mapper_documentation/)
+
 ## Overview
 
 The `flood_mapper` package is a Python-based tool designed for rapid and flexible mapping of flooded areas using Google Earth Engine (GEE). It leverages pre- and post-event satellite imagery from Sentinel-1 (Synthetic Aperture Radar - SAR) and Sentinel-2 (optical) to detect flood extents. The package offers users the flexibility to choose their preferred detection method and handles data ingestion, preprocessing, flood detection, and export of results to Google Earth Engine Assets.
