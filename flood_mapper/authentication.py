@@ -15,11 +15,14 @@ def initialize_ee(project_name=None):
         project_name (str, optional): The Earth Engine project ID to initialize.
                                       If None, uses the default project.
     """
+    if project_name == None:
+        raise Exception("Please provide a Google project ID that has access to GEE.")
+    # first try to initialize connection with GEE server with existing token
     try:
         ee.Authenticate()
         ee.Initialize(project=project_name)
         print("Google Earth Engine initialized successfully.")
     except Exception as e:
         print(f"Error initializing Google Earth Engine: {e}")
-        print("Please ensure you have authenticated and have access to the specified project or Google Earth Engine.")
+        print("Please provide a Google project ID that has access to GEE.")
         raise
