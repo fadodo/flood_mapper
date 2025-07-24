@@ -12,13 +12,13 @@ import numpy as np
 import matplotlib.pyplot as plt
 from flood_mapper.utils import check_same_pixel_count, load_aoi_from_geojson, calculate_area
 
-def compute_otsu_threshold(image, band_name, otsu_aoi, scale=30, bins=256, plot=False):
+def compute_otsu_threshold(image, band_name, otsu_aoi, scale=10, bins=256, plot=False):
     """
     Computes the Otsu threshold for a specific band within a specific region.
 
     Args:
         image (ee.Image): The image from which to compute the histogram.
-        band_name (str): The name of the band to use for thresholding (e.g., 'VH').
+        band_name (str): The name of the band to use for thresholding (e.g., 'VH', 'VV_minus_VH').
         otsu_aoi (ee.Geometry.Polygon): The region of interest for histogram computation.
         scale (float): The nominal scale in meters of the projection to work in.
         bins (int): The number of histogram bins.
@@ -49,6 +49,11 @@ def compute_otsu_threshold(image, band_name, otsu_aoi, scale=30, bins=256, plot=
     mu_t = mu[-1]
 
     sigma_b_squared = (mu_t * omega - mu) ** 2 / (omega * (1 - omega) + 1e-10)
+
+    # Handle cases where sigma_b_squared might contain NaNs or infs due to empty classes
+    sigma_b_squared[np.isnan(sigma_b_squared)] = 0
+    sigma_b_squared[np.isinf(sigma_b_squared)] = 0
+
     max_index = np.argmax(sigma_b_squared)
     threshold = values[max_index]
 
@@ -65,7 +70,7 @@ def compute_otsu_threshold(image, band_name, otsu_aoi, scale=30, bins=256, plot=
 
     return threshold
 
-def detect_flood_extent(pre_event_sar, post_event_sar, aoi, otsu_aoi=None):
+def detect_flood_extent(pre_event_sar, post_event_sar, aoi, otsu_aoi=None, sar_threshold_band='VH'):
     """
     Detects flood extent using change detection on SAR imagery and Otsu's method.
     If pixel counts are inconsistent, the detection is performed only on common available pixels.
@@ -75,10 +80,15 @@ def detect_flood_extent(pre_event_sar, post_event_sar, aoi, otsu_aoi=None):
         post_event_sar (ee.Image): Post-event smoothed SAR image.
         aoi (ee.Geometry.Polygon): The main Area of Interest for the analysis.
         otsu_aoi (ee.Geometry.Polygon, optional): The specific region for Otsu threshold computation.
-                                                If None, a default small polygon over Lac Togo will be used.
+                                        If None, a default small polygon over Lac Togo will be used.
+        sar_threshold_band (str): The SAR band to use for Otsu thresholding.
+                                  Options: 'VV', 'VH', or 'VV_minus_VH'.
 
     Returns:
-        ee.Image: Binary image representing flood extent.
+        tuple: A tuple containing:
+            - ee.Image: Binary image representing pre-event water.
+            - ee.Image: Binary image representing post-event water.
+            - ee.Image: Binary image representing flood extent.
     """
     # Determine the region for Otsu threshold calculation
     if otsu_aoi is None:
@@ -114,17 +124,40 @@ def detect_flood_extent(pre_event_sar, post_event_sar, aoi, otsu_aoi=None):
     else:
         print("Pre-event and post-event SAR images have consistent pixel counts.")
 
-    # Compute Otsu thresholds for pre- and post-event images using the (possibly masked) images
-    threshold_pre = compute_otsu_threshold(pre_event_sar_for_processing, 'VH', aoi_hist_region, plot=True)
-    threshold_post = compute_otsu_threshold(post_event_sar_for_processing, 'VH', aoi_hist_region, plot=True)
+    # --- Create derived band if requested for Otsu thresholding ---
+    if sar_threshold_band == 'VV_minus_VH':
+        # Ensure 'VV' and 'VH' bands exist for this calculation
+        if 'VV' not in pre_event_sar_for_processing.bandNames().getInfo() or \
+           'VH' not in pre_event_sar_for_processing.bandNames().getInfo():
+            raise ValueError("Pre-event SAR image must contain 'VV' and 'VH' bands to create 'VV_minus_VH'.")
+        if 'VV' not in post_event_sar_for_processing.bandNames().getInfo() or \
+           'VH' not in post_event_sar_for_processing.bandNames().getInfo():
+            raise ValueError("Post-event SAR image must contain 'VV' and 'VH' bands to create 'VV_minus_VH'.")
 
-    print(f"Otsu Threshold for pre-event SAR image: {threshold_pre:.2f}")
-    print(f"Otsu Threshold for post-event SAR image: {threshold_post:.2f}")
+        # Calculate VV - VH difference (often effective for water)
+        pre_event_sar_for_processing = pre_event_sar_for_processing.addBands(
+            pre_event_sar_for_processing.select('VV').subtract(pre_event_sar_for_processing.select('VH')).rename('VV_minus_VH')
+        )
+        post_event_sar_for_processing = post_event_sar_for_processing.addBands(
+            post_event_sar_for_processing.select('VV').subtract(post_event_sar_for_processing.select('VH')).rename('VV_minus_VH')
+        )
+    elif sar_threshold_band not in pre_event_sar_for_processing.bandNames().getInfo():
+        raise ValueError(f"Selected SAR threshold band '{sar_threshold_band}' not found in pre-event SAR image.")
+    elif sar_threshold_band not in post_event_sar_for_processing.bandNames().getInfo():
+        raise ValueError(f"Selected SAR threshold band '{sar_threshold_band}' not found in post-event SAR image.")
+    
+    # Use the derived band for Otsu threshold calculation
+    threshold_band_name = sar_threshold_band
+    threshold_pre = compute_otsu_threshold(pre_event_sar_for_processing, threshold_band_name, aoi_hist_region, plot=True)
+    threshold_post = compute_otsu_threshold(post_event_sar_for_processing, threshold_band_name, aoi_hist_region, plot=True)
+
+    print(f"Otsu Threshold for pre-event SAR image (on {threshold_band_name}): {threshold_pre:.2f}")
+    print(f"Otsu Threshold for post-event SAR image (on {threshold_band_name}): {threshold_post:.2f}")
 
     # Create binary masks for water (values below threshold)
     # Apply thresholds to the commonly masked images if inconsistent, otherwise original
-    water_pre = pre_event_sar_for_processing.select('VH').lt(threshold_pre)
-    water_post = post_event_sar_for_processing.select('VH').lt(threshold_post)
+    water_pre = pre_event_sar_for_processing.select(threshold_band_name).lt(threshold_pre)
+    water_post = post_event_sar_for_processing.select(threshold_band_name).lt(threshold_post)
 
     # Detect new flood areas (water_post AND NOT water_pre)
     # The result will inherently only contain pixels common to both original images if common_mask was applied
@@ -233,7 +266,7 @@ def calculate_flood_extension(effective_flood_extent_image):
     """
     if effective_flood_extent_image is None:
         print("WARNING: Effective flood extent image is None. Cannot calculate flood extension area.")
-        return None
+        return 0.0
 
     # Calculate the area of the effective_flood_extent_image
     # The utils.calculate_area function already handles the reduction and conversion to km^2

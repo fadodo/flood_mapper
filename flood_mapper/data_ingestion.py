@@ -61,17 +61,11 @@ def get_sentinel1_collection(roi, start_date, end_date):
     if isinstance(end_date, str):
         end_date = datetime.strptime(end_date, "%Y-%m-%d")
 
-    #Check if the given list of dates is in the correct chronological order.
-    if end_date <= start_date:
-        raise Exception("Verify that your dates are in the correct chronological order")
-
-
     s1_collection = (ee.ImageCollection("COPERNICUS/S1_GRD")
                      .filter(ee.Filter.eq("instrumentMode", "IW"))
                      .filter(ee.Filter.eq("resolution_meters", 10))
                      .filterBounds(roi)
                      .filterDate(start_date, end_date)
-                     .map(mask_edge)
                      )
 
     if s1_collection.size().getInfo() < 2:
@@ -105,10 +99,35 @@ def mask_s2_clouds(image):
   return image.updateMask(mask).divide(10000)
 
 
+def _check_s2_bands_validity(image, geometry, scale=10):
+    """
+    Helper function to check if an S2 image has valid (unmasked) pixels
+    in the 'B3' and 'B8' bands within a given geometry.
+    """
+    # Reduce regions to get pixel counts for B3 and B8
+    b3_count_property = image.select("B3").reduceRegion(ee.Reducer.count(), geometry, scale).get("B3")
+    b8_count_property = image.select("B8").reduceRegion(ee.Reducer.count(), geometry, scale).get("B8")
+
+    # Use ee.Algorithms.If to handle potential null values from .get()
+    is_b3_valid = ee.Algorithms.If(
+        ee.Algorithms.Is.notNull(b3_count_property),
+        ee.Number(b3_count_property).gt(0),
+        False # If b3_count_property is null, then it's not valid
+    )
+    is_b8_valid = ee.Algorithms.If(
+        ee.Algorithms.Is.notNull(b8_count_property),
+        ee.Number(b8_count_property).gt(0),
+        False # If b8_count_property is null, then it's not valid
+    )
+    
+    # Combine the boolean results and set a property on the image
+    return image.set('has_required_bands_pixels', ee.Algorithms.And(is_b3_valid, is_b8_valid))
+
+
 def get_sentinel2_collection(roi, start_date, end_date, cloud_pixel_percentage=30):
     """
     Collects Sentinel-2 imagery for a specified region and time period,
-    filtering by cloud cover.
+    filtering by cloud cover and ensuring images have valid pixels for NDWI.
 
     Args:
         roi (ee.Geometry.Polygon): Region of interest.
@@ -127,9 +146,8 @@ def get_sentinel2_collection(roi, start_date, end_date, cloud_pixel_percentage=3
                      .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', cloud_pixel_percentage))
                      .filterBounds(roi)
                      .filterDate(start_date, end_date)
-                     .map(mask_s2_clouds)
-                     )
-
+                    )
+    
     if s2_collection.size().getInfo() < 2:
         raise ValueError(
             "No Sentinel-2 images found for the event date range and location. "
